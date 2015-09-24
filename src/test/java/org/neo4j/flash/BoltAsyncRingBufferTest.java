@@ -3,6 +3,7 @@ package org.neo4j.flash;
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Values;
 import rx.Observable;
+import rx.observables.BlockingObservable;
 
 /**
  * @author mh
@@ -16,13 +17,12 @@ public class BoltAsyncRingBufferTest {
         Observable<AsyncSession> session = Flash.open("bolt://localhost");
 
         session.forEach((s) -> {
-            // todo tx
-            Observable<AsyncQueryResult> result = s.executeQuery(
-                    "MATCH (n:Person {name:{name}}) return n",
-                    Values.parameters("name", "Tom Hanks"));
+            BlockingObservable<AsyncQueryResult> result = s.executeQuery(
+                    "MATCH (n:Person {name:{name}}) return n",
+                    Values.parameters("name", "Tom Hanks")).toBlocking();
             result.forEach((r) -> r.fields.forEach(System.out::println));
 
-            result.flatMap((r) -> r.rows).map((r2) -> r2.get("n").get("name").javaString()).forEach(System.out::println);
+            result.forEach( (r) -> r.rows.map((r2) -> r2.get("n").get("name").javaString()).forEach(System.out::println));
         });
     }
 }

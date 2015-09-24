@@ -1,5 +1,6 @@
 package org.neo4j.flash;
 
+import org.neo4j.driver.Config;
 import org.neo4j.driver.GraphDatabase;
 import rx.Observable;
 
@@ -9,7 +10,7 @@ import rx.Observable;
  */
 public class Flash {
     public static Observable<AsyncSession> open(String url) {
-
-        return Observable.just(new AsyncSession(GraphDatabase.driver(url).session()));
+        Config config = Config.build().toConfig();
+        return Observable.just(new AsyncSession(GraphDatabase.driver(url).session(), new FlashCore(new FlashCore.FlashEnvironment(), config)));
     }
 }

@@ -20,6 +20,19 @@ import java.util.concurrent.Executors;
 public class FlashCore {
 
     private final Config config;
+    private final Log LOGGER;
+
+    /**
+     * The {@link RequestEvent} {@link RingBuffer}.
+     */
+    private final RingBuffer<RequestEvent> requestRingBuffer;
+    private final Disruptor<RequestEvent> requestDisruptor;
+    private final EventHandler<RequestEvent> requestHandler;
+
+    private final FlashEnvironment environment;
+
+    private final Disruptor<ResponseEvent> responseDisruptor;
+    private final ExecutorService disruptorExecutor;
 
     static class Log {
         private Logger log;
@@ -42,9 +55,6 @@ public class FlashCore {
         }
     }
 
-    private final Log LOGGER;
-
-
     public static class BoltResponse {
         Result result;
 
@@ -58,14 +68,17 @@ public class FlashCore {
         public final Map<String, Value> params;
         public final Subject<BoltResponse, BoltResponse> observable;
         public String url;
+        public AsyncSession session;
 
-        BoltRequest(String query, Map<String, Value> params) {
+        BoltRequest(AsyncSession session, String query, Map<String, Value> params) {
+            this.session = session;
             this.query = query;
             this.params = params;
             this.observable = AsyncSubject.create();
         }
     }
 
+    // for disruptor
     static class RequestEvent {
         BoltRequest request;
 
@@ -74,17 +87,20 @@ public class FlashCore {
         }
     }
 
+    // for disruptor
     static class ResponseEvent {
         public Subject<BoltResponse, BoltResponse> observable;
         public Result result;
     }
-    
+
+    // for disruptor
     static class RequestEventFactory implements EventFactory<RequestEvent> {
         @Override
         public RequestEvent newInstance() {
             return new RequestEvent();
         }
     }
+    // for disruptor
     static class ResponseEventFactory implements EventFactory<ResponseEvent> {
         @Override
         public ResponseEvent newInstance() {
@@ -95,11 +111,11 @@ public class FlashCore {
     static class FlashEnvironment {
 
         public int responseBufferSize() {
-            return 2^14; // 16k
+            return 1 << 14; // 16k
         }
 
         public int requestBufferSize() {
-            return 2^14; // 16k
+            return 1 << 14; // 16k
         }
     }
     
@@ -107,32 +123,13 @@ public class FlashCore {
          * Translates {@link BoltRequest}s into {@link RequestEvent}s.
          */
         private static final EventTranslatorOneArg<RequestEvent, BoltRequest> REQUEST_TRANSLATOR =
-                new EventTranslatorOneArg<RequestEvent, BoltRequest>() {
-                    @Override
-                    public void translateTo(RequestEvent event, long sequence, BoltRequest request) {
-                        event.setRequest(request);
-                    }
-                };
+                (event, sequence, request) -> event.setRequest(request);
 
         /**
          * A preconstructed {@link BackpressureException}.
          */
         private static final BackpressureException BACKPRESSURE_EXCEPTION = new BackpressureException();
 
-        /**
-         * The {@link RequestEvent} {@link RingBuffer}.
-         */
-        private final RingBuffer<RequestEvent> requestRingBuffer;
-
-        /**
-         * The handler for all cluster nodes.
-         */
-        private final EventHandler<RequestEvent> requestHandler;
-
-        private final FlashEnvironment environment;
-        private final Disruptor<RequestEvent> requestDisruptor;
-        private final Disruptor<ResponseEvent> responseDisruptor;
-        private final ExecutorService disruptorExecutor;
 
         /**
          * Populate the static exceptions with stack trace elements.
@@ -226,8 +223,8 @@ public class FlashCore {
         @Override
         public void onEvent(final RequestEvent event, long sequence, boolean endOfBatch) throws Exception {
             BoltRequest request = event.request;
-            final Result resultHandle = GraphDatabase.driver("bolt://localhost").session().run(request.query, request.params); // blocking
-            // would be nice if it is was streaming then we could put one record on the responseDisruptor
+            final Result resultHandle = request.session.runSync(request.query, request.params); // blocking
+            // would be nice if it is was streaming then we could put one record at a time on the responseDisruptor
 
             responseRingBuffer.publishEvent((responseEvent, sequence1) -> {
                 responseEvent.result = resultHandle;
